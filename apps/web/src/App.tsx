@@ -176,6 +176,15 @@ function App() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!deleteTarget) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !deleting) setDeleteTarget(null);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [deleteTarget, deleting]);
+
   const stats = useMemo(() => ({
     visible: accounts.length,
     running: accounts.filter((account) => account.browserStatus === 'RUNNING').length,
@@ -274,9 +283,9 @@ function App() {
             FLASH <span>ROUTER</span>
           </a>
           <div className="topbar__meta">
-            <span className="local-badge"><span className="pulse-dot" /> Máy cục bộ</span>
+            <span className={`local-badge local-badge--${listError ? 'offline' : loading ? 'checking' : 'online'}`}><span className="pulse-dot" /> {listError ? 'Backend gián đoạn' : loading ? 'Đang kiểm tra backend' : 'Backend đang kết nối'}</span>
             <a className="owner-link" href="https://zalo.me/0379052767" target="_blank" rel="noreferrer">
-              Liên hệ chủ dự án <Icon name="external" />
+              <span className="owner-link__label">Liên hệ chủ dự án</span> <Icon name="external" />
             </a>
           </div>
         </div>
@@ -339,9 +348,9 @@ function App() {
               <button className="button button--ghost" onClick={reloadAccounts} disabled={loading} title={loading ? 'Đang tải danh sách' : 'Tải lại từ backend'}><Icon name="refresh" /> Làm mới</button>
             </div>
             <form className="search-bar" onSubmit={submitSearch} role="search">
-              <Icon name="search" /><input aria-label="Tìm tài khoản" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Tìm theo email hoặc tên hiển thị" /><button className="search-bar__submit" type="submit" aria-label="Tìm kiếm">Tìm</button>
+              <Icon name="search" /><input name="account-search" type="search" autoComplete="off" aria-label="Tìm tài khoản" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Tìm theo email hoặc tên hiển thị" /><button className="search-bar__submit" type="submit" aria-label="Tìm kiếm">Tìm</button>
             </form>
-            {loading ? <div className="state-block"><div className="spinner" /><p>Đang tải danh sách từ backend...</p></div> : listError ? <div className="state-block state-block--error"><strong>Chưa thể tải danh sách</strong><p>{listError}</p><button className="button button--secondary" onClick={reloadAccounts}><Icon name="refresh" /> Thử lại</button></div> : accounts.length === 0 ? <div className="state-block state-block--empty"><span className="empty-mark">∅</span><strong>Chưa có tài khoản nào</strong><p>{submittedQuery ? 'Không có hồ sơ phù hợp với tìm kiếm hiện tại.' : 'Danh sách trống vì backend chưa trả về hồ sơ nào. Bạn có thể thêm tài khoản ở khung bên trái.'}</p></div> : <div className="account-list">{accounts.map((account) => <AccountCard key={account.id} account={account} busyAction={actions[account.id]} onAction={handleAction} onDelete={() => { setDeleteTarget(account); setDeleteConfirmation(''); }} />)}</div>}
+            {loading ? <div className="state-block" role="status" aria-live="polite"><div className="spinner" aria-hidden="true" /><p>Đang tải danh sách từ backend...</p></div> : listError ? <div className="state-block state-block--error" role="alert"><strong>Chưa thể tải danh sách</strong><p>{listError}</p><button className="button button--secondary" onClick={reloadAccounts}><Icon name="refresh" /> Thử lại</button></div> : accounts.length === 0 ? <div className="state-block state-block--empty"><span className="empty-mark">∅</span><strong>Chưa có tài khoản nào</strong><p>{submittedQuery ? 'Không có hồ sơ phù hợp với tìm kiếm hiện tại.' : 'Danh sách trống vì backend chưa trả về hồ sơ nào. Bạn có thể thêm tài khoản ở khung bên trái.'}</p></div> : <div className="account-list">{accounts.map((account) => <AccountCard key={account.id} account={account} busyAction={actions[account.id]} onAction={handleAction} onDelete={() => { setDeleteTarget(account); setDeleteConfirmation(''); }} />)}</div>}
             {!loading && !listError && nextCursor && <button className="button button--load-more" onClick={loadMore} disabled={loadingMore}>{loadingMore ? 'Đang tải thêm...' : 'Tải thêm hồ sơ'} <Icon name="arrow" /></button>}
           </div>
         </section>
@@ -355,7 +364,7 @@ function App() {
 
       <footer className="footer"><span>FLASH ROUTER · Local session workspace</span><a href="https://zalo.me/0379052767" target="_blank" rel="noreferrer">by @hnam1204 <Icon name="external" /></a></footer>
 
-      {deleteTarget && <div className="modal-backdrop" role="presentation"><div className="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="delete-title"><button className="icon-button modal-close" onClick={() => setDeleteTarget(null)} aria-label="Đóng hộp thoại"><Icon name="close" /></button><div className="danger-mark"><Icon name="trash" /></div><p className="eyebrow">XÁC NHẬN XÓA CỤC BỘ</p><h2 id="delete-title">Xóa hồ sơ này?</h2><p>Thao tác sẽ yêu cầu backend đóng trình duyệt và xóa dữ liệu thuộc hồ sơ <strong>{deleteTarget.email}</strong> trên máy này. Không xóa tài khoản từ nhà cung cấp.</p><label htmlFor="delete-confirmation">Nhập lại email để xác nhận</label><input id="delete-confirmation" value={deleteConfirmation} onChange={(event) => setDeleteConfirmation(event.target.value)} placeholder={deleteTarget.email} autoFocus /><div className="modal-actions"><button className="button button--ghost" onClick={() => setDeleteTarget(null)}>Hủy</button><button className="button button--danger" onClick={handleDelete} disabled={deleting || deleteConfirmation.trim() !== deleteTarget.email} title={deleteConfirmation.trim() !== deleteTarget.email ? 'Nhập chính xác email của hồ sơ' : undefined}><Icon name="trash" /> {deleting ? 'Đang gửi...' : 'Xác nhận xóa'}</button></div></div></div>}
+      {deleteTarget && <div className="modal-backdrop" role="presentation"><div className="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="delete-title" aria-describedby="delete-description"><button className="icon-button modal-close" onClick={() => setDeleteTarget(null)} aria-label="Đóng hộp thoại"><Icon name="close" /></button><div className="danger-mark"><Icon name="trash" /></div><p className="eyebrow">XÁC NHẬN XÓA CỤC BỘ</p><h2 id="delete-title">Xóa hồ sơ này?</h2><p id="delete-description">Thao tác sẽ yêu cầu backend đóng trình duyệt và xóa dữ liệu thuộc hồ sơ <strong>{deleteTarget.email}</strong> trên máy này. Không xóa tài khoản từ nhà cung cấp.</p><label htmlFor="delete-confirmation">Nhập lại email để xác nhận</label><input id="delete-confirmation" value={deleteConfirmation} onChange={(event) => setDeleteConfirmation(event.target.value)} placeholder={deleteTarget.email} autoFocus /><div className="modal-actions"><button className="button button--ghost" onClick={() => setDeleteTarget(null)}>Hủy</button><button className="button button--danger" onClick={handleDelete} disabled={deleting || deleteConfirmation.trim() !== deleteTarget.email} title={deleteConfirmation.trim() !== deleteTarget.email ? 'Nhập chính xác email của hồ sơ' : undefined}><Icon name="trash" /> {deleting ? 'Đang gửi...' : 'Xác nhận xóa'}</button></div></div></div>}
     </div>
   );
 }

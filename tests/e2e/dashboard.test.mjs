@@ -40,8 +40,8 @@ function stop(child) {
 test('dashboard creates and lists an account through the real local API', async () => {
   const dataDir = await mkdtemp(join(tmpdir(), 'flash-router-e2e-'));
   const serverPort = randomInt(32000, 39000);
-  const webPort = 5173;
-  const env = { ...process.env, FLASH_ROUTER_DATA_DIR: dataDir, FLASH_ROUTER_HOST: '127.0.0.1', FLASH_ROUTER_PORT: String(serverPort) };
+  const webPort = randomInt(39001, 45000);
+  const env = { ...process.env, FLASH_ROUTER_DATA_DIR: dataDir, FLASH_ROUTER_HOST: '127.0.0.1', FLASH_ROUTER_PORT: String(serverPort), FLASH_ROUTER_WEB_PORT: String(webPort) };
   let server;
   let web;
   let browser;

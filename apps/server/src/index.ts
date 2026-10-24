@@ -35,7 +35,13 @@ function readPort(): number {
   return value;
 }
 
-const localOrigins = new Set(['http://127.0.0.1:5173', 'http://localhost:5173']);
+function allowedWebOrigins(): string[] {
+  const configuredPort = Number(process.env.FLASH_ROUTER_WEB_PORT ?? '5173');
+  if (!Number.isInteger(configuredPort) || configuredPort < 1 || configuredPort > 65535) {
+    throw new Error('invalid web port');
+  }
+  return [`http://127.0.0.1:${configuredPort}`, `http://localhost:${configuredPort}`];
+}
 
 function publicBrowserStatus(status: BrowserStatus): Omit<BrowserStatus, 'profilePath'> {
   const { profilePath: _profilePath, ...safeStatus } = status;
@@ -62,7 +68,8 @@ export function buildApp(options: AppOptions = {}) {
   });
   const deletion = new DeletionCoordinator(browser, { dataDir, profilesRoot });
   const app = Fastify({ logger: false });
-  app.register(cors, { origin: ['http://127.0.0.1:5173', 'http://localhost:5173'] });
+  const localOrigins = new Set(allowedWebOrigins());
+  app.register(cors, { origin: [...localOrigins] });
   app.addHook('onRequest', async (request, reply) => {
     if (request.method === 'OPTIONS' || request.method === 'GET' || request.method === 'HEAD') return;
     const origin = request.headers.origin;
@@ -124,7 +131,9 @@ export function buildApp(options: AppOptions = {}) {
     }
   });
 
-  app.get('/api/events/stream', async (_request, reply) => {
+  app.get('/api/events/stream', async (request, reply) => {
+    const origin = request.headers.origin;
+    if (origin && localOrigins.has(origin)) reply.raw.setHeader('Access-Control-Allow-Origin', origin);
     reply.raw.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
     for (const event of events.recent()) reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
     const unsubscribe = events.subscribe((event) => reply.raw.write(`data: ${JSON.stringify(event)}\n\n`));
