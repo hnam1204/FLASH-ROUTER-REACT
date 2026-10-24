@@ -139,7 +139,7 @@ function validateAccountId(accountId: string): void {
     accountId.length === 0 ||
     accountId.length > 256 ||
     accountId !== accountId.trim() ||
-    /[\u0000-\u001f\u007f]/u.test(accountId)
+    /[\u0000-\u001f\u007f\\/]/u.test(accountId)
   ) {
     throw new BrowserSupervisorError('INVALID_ACCOUNT_ID', 'Account ID is invalid.');
   }
@@ -179,6 +179,7 @@ export class BrowserSupervisor {
   private readonly options: Required<Pick<BrowserSupervisorOptions, 'defaultHeadless' | 'browserChannel'>> & {
     profilesRoot: string;
     runtime?: BrowserRuntime;
+    onUnexpectedClose?: BrowserSupervisorOptions['onUnexpectedClose'];
   };
 
   private readonly running = new Map<string, RunningBrowser>();
@@ -194,6 +195,7 @@ export class BrowserSupervisor {
       defaultHeadless: options.defaultHeadless ?? false,
       browserChannel: options.browserChannel ?? 'chrome',
       runtime: options.runtime,
+      onUnexpectedClose: options.onUnexpectedClose,
     };
   }
 
@@ -440,12 +442,19 @@ export class BrowserSupervisor {
     return this.failure(status, status.reason ?? 'LOCK_RELEASE_FAILED');
   }
 
+  async closeAll(): Promise<void> {
+    await Promise.all([...this.running.values()].map(async (record) => {
+      await this.stop(record.accountId);
+    }));
+  }
+
   private async handleUnexpectedClose(record: RunningBrowser): Promise<void> {
     if (this.running.get(record.accountHash) !== record) {
       return;
     }
 
-    await this.finalizeClosedRecord(record);
+    const status = await this.finalizeClosedRecord(record);
+    if (!record.stopRequested) await this.options.onUnexpectedClose?.(status);
   }
 
   private async finalizeClosedRecord(

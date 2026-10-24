@@ -51,6 +51,7 @@ export interface BrowserSupervisorOptions {
   defaultHeadless?: boolean;
   browserChannel?: string;
   runtime?: BrowserRuntime;
+  onUnexpectedClose?: (status: BrowserStatus) => void | Promise<void>;
 }
 
 export interface BrowserStartOptions {

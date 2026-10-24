@@ -10,10 +10,14 @@ const updateAccountSchema = z.object({
   plan: z.string().trim().min(1).max(120).optional(),
 }).refine((value) => Object.keys(value).length > 0, 'Cần cung cấp metadata cần cập nhật');
 
-const deleteAccountSchema = z.object({ confirm: z.literal(true) });
+const deleteAccountSchema = z.object({ confirm: z.literal(true), expectedEmail: z.string().email().optional() });
 
 type AccountParams = { id: string };
 type AccountListQuery = { cursor?: string; limit?: string; q?: string };
+type AccountRouteOptions = {
+  beforeDelete?: (id: string) => void;
+  afterDelete?: (id: string) => void;
+};
 
 function validationError(reply: FastifyReply, details: string[] = ['Dữ liệu không hợp lệ']) {
   return reply.code(400).send({
@@ -37,16 +41,11 @@ function decodeCursor(value: string | undefined): AccountCursor | null | undefin
 }
 
 function parseCredentialInput(input: string): { email: string } | null {
-  const fields = input.split('|');
-  if (fields.length !== 3) return null;
-  const email = fields[0].trim().toLowerCase();
-  const password = fields[1];
-  const twoFactorCode = fields[2].trim();
-  if (!password || !twoFactorCode || !z.string().email().safeParse(email).success) return null;
-  return { email };
+  const email = input.trim().toLowerCase();
+  return z.string().email().safeParse(email).success ? { email } : null;
 }
 
-export function registerAccountRoutes(app: FastifyInstance, database: AccountDatabase, deletion?: DeletionCoordinator): void {
+export function registerAccountRoutes(app: FastifyInstance, database: AccountDatabase, deletion?: DeletionCoordinator, options: AccountRouteOptions = {}): void {
   app.get<{ Querystring: AccountListQuery }>('/api/accounts', async (request, reply) => {
     const limit = request.query.limit === undefined ? 50 : Number(request.query.limit);
     const query = request.query.q?.trim() ?? '';
@@ -79,7 +78,7 @@ export function registerAccountRoutes(app: FastifyInstance, database: AccountDat
     }
     const parsedCredentials = parseCredentialInput(parsedBody.data.input);
     if (!parsedCredentials) {
-      return validationError(reply, ['input phải có dạng EMAIL|PASS|2FA hợp lệ']);
+      return validationError(reply, ['input phải là email hợp lệ']);
     }
     const account = accountSchema.parse({
       id: randomUUID(),
@@ -125,9 +124,17 @@ export function registerAccountRoutes(app: FastifyInstance, database: AccountDat
     if (!database.getAccount(request.params.id)) {
       return reply.code(404).send({ error: 'NOT_FOUND', message: 'Không tìm thấy tài khoản' });
     }
+    const currentAccount = database.getAccount(request.params.id);
+    if (parsedBody.data.expectedEmail && parsedBody.data.expectedEmail.toLowerCase() !== currentAccount?.email.toLowerCase()) {
+      return reply.code(409).send({ error: 'IDENTITY_MISMATCH', message: 'Email xác nhận không khớp hồ sơ.' });
+    }
+    options.beforeDelete?.(request.params.id);
     if (deletion) {
       const result = await deletion.deleteAccount(request.params.id);
-      if (!result.ok) return reply.code(409).send({ error: result.code, message: result.message });
+      if (!result.ok) {
+        options.afterDelete?.(request.params.id);
+        return reply.code(409).send({ error: result.code, message: result.message });
+      }
     }
     if (!database.deleteAccount(request.params.id)) {
       return reply.code(404).send({
@@ -135,6 +142,7 @@ export function registerAccountRoutes(app: FastifyInstance, database: AccountDat
         message: 'Không tìm thấy tài khoản',
       });
     }
+    options.afterDelete?.(request.params.id);
     return reply.send({ deleted: true, id: request.params.id });
   });
 }

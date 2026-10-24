@@ -14,6 +14,7 @@ export interface BrowserSupervisorPort {
 
 export interface DeletionCoordinatorOptions {
   dataDir?: string;
+  profilesRoot?: string;
 }
 
 export interface DeletionCompleteResult {

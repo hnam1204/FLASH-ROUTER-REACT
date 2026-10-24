@@ -23,7 +23,10 @@ export class JobManager {
   }
 
   get(id: string): Job | undefined { return this.jobs.get(id); }
-  cancel(id: string): boolean { const job = this.jobs.get(id); if (!job || job.status !== 'QUEUED') return false; job.status = 'CANCELLED'; job.finishedAt = new Date().toISOString(); return true; }
+  cancel(id: string): boolean { const job = this.jobs.get(id); if (!job || job.status !== 'QUEUED') return false; job.status = 'CANCELLED'; job.finishedAt = new Date().toISOString(); this.events.publish({ account_id: job.accountId, job_id: job.id, type: 'JOB', severity: 'warning', stage: job.stage, safe_message: 'Job đã bị hủy.' }); return true; }
+  cancelAccount(accountId: string): void {
+    for (const job of this.jobs.values()) if (job.accountId === accountId) this.cancel(job.id);
+  }
 
   private async pump(accountId: string): Promise<void> {
     if (this.active.size >= this.maxConcurrent || this.active.has(accountId)) return;
@@ -41,6 +44,13 @@ export class JobManager {
       task.job.errorCode = 'JOB_FAILED';
       this.events.publish({ account_id: accountId, job_id: task.job.id, type: 'ERROR', severity: 'error', stage: task.job.stage, safe_message: 'Job không hoàn tất.', error_code: task.job.errorCode });
     }
-    finally { task.job.finishedAt = new Date().toISOString(); this.active.delete(accountId); void this.pump(accountId); }
+    finally { task.job.finishedAt = new Date().toISOString(); this.active.delete(accountId); void this.pumpAll(); }
+  }
+
+  private async pumpAll(): Promise<void> {
+    for (const accountId of this.queues.keys()) {
+      if (this.active.size >= this.maxConcurrent) return;
+      void this.pump(accountId);
+    }
   }
 }

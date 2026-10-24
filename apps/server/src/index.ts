@@ -38,22 +38,32 @@ export function buildApp(options: AppOptions = {}) {
   const database = new AccountDatabase(options.databasePath ?? defaultDatabasePath());
   const dataDir = options.dataDir ?? defaultDataDirectory();
   const profilesRoot = options.profilesRoot ?? resolve(dataDir, 'profiles');
-  const browser = new BrowserSupervisor({ profilesRoot });
-  const deletion = new DeletionCoordinator(browser, { dataDir });
   const events = new EventHub();
   const jobs = new JobManager(events);
+  const deletingAccounts = new Set<string>();
+  const browser = new BrowserSupervisor({
+    profilesRoot,
+    onUnexpectedClose: async (status) => {
+      database.updateRuntimeState(status.accountId, { browserStatus: 'CRASHED', automationStatus: 'FAILED' });
+      events.publish({ account_id: status.accountId, type: 'BROWSER', severity: 'error', stage: 'crash', safe_message: 'Chrome profile đã dừng bất thường; dữ liệu profile được giữ nguyên.', error_code: status.reason ?? 'BROWSER_CRASHED' });
+    },
+  });
+  const deletion = new DeletionCoordinator(browser, { dataDir, profilesRoot });
   const app = Fastify({ logger: false });
   app.register(cors, { origin: ['http://127.0.0.1:5173', 'http://localhost:5173'] });
 
   app.addHook('onClose', async () => {
+    await browser.closeAll();
     database.close();
   });
 
   app.post<{ Params: { id: string } }>('/api/accounts/:id/browser/open', async (request, reply) => {
     if (!database.getAccount(request.params.id)) return reply.code(404).send({ error: 'NOT_FOUND', message: 'Không tìm thấy tài khoản' });
+    if (deletingAccounts.has(request.params.id)) return reply.code(409).send({ error: 'ACCOUNT_DELETING', message: 'Tài khoản đang được xóa cục bộ.' });
     const job = jobs.enqueue(request.params.id, 'browser.open', async () => {
       const result = await browser.start(request.params.id, { headless: false });
-      database.updateRuntimeState(request.params.id, { browserStatus: result.status.state === 'RUNNING' ? 'RUNNING' : 'CRASHED', automationStatus: result.ok ? 'COMPLETED' : 'FAILED' });
+      const browserStatus = result.ok ? 'RUNNING' : result.reason === 'BROWSER_LAUNCH_FAILED' || result.reason === 'LOCK_RELEASE_FAILED' ? 'CRASHED' : 'STOPPED';
+      database.updateRuntimeState(request.params.id, { browserStatus, automationStatus: result.ok ? 'COMPLETED' : 'FAILED' });
       events.publish({ account_id: request.params.id, type: 'BROWSER', severity: result.ok ? 'info' : 'error', stage: 'open', safe_message: result.ok ? 'Chrome profile đã mở.' : 'Không thể mở Chrome profile.', error_code: result.reason });
       if (!result.ok) throw new Error(result.reason ?? 'BROWSER_OPEN_FAILED');
     });
@@ -63,9 +73,11 @@ export function buildApp(options: AppOptions = {}) {
 
   app.post<{ Params: { id: string } }>('/api/accounts/:id/browser/close', async (request, reply) => {
     if (!database.getAccount(request.params.id)) return reply.code(404).send({ error: 'NOT_FOUND', message: 'Không tìm thấy tài khoản' });
+    if (deletingAccounts.has(request.params.id)) return reply.code(409).send({ error: 'ACCOUNT_DELETING', message: 'Tài khoản đang được xóa cục bộ.' });
     const job = jobs.enqueue(request.params.id, 'browser.close', async () => {
       const result = await browser.stop(request.params.id);
-      database.updateRuntimeState(request.params.id, { browserStatus: result.status.state === 'STOPPED' ? 'STOPPED' : 'CRASHED', automationStatus: result.ok ? 'COMPLETED' : 'FAILED' });
+      const browserStatus = result.ok ? 'STOPPED' : result.reason === 'BROWSER_CLOSE_FAILED' ? 'CRASHED' : result.status.state === 'RUNNING' ? 'RUNNING' : 'STOPPED';
+      database.updateRuntimeState(request.params.id, { browserStatus, automationStatus: result.ok ? 'COMPLETED' : 'FAILED' });
       events.publish({ account_id: request.params.id, type: 'BROWSER', severity: result.ok ? 'info' : 'error', stage: 'close', safe_message: result.ok ? 'Chrome profile đã đóng.' : 'Không thể đóng Chrome profile.', error_code: result.reason });
       if (!result.ok) throw new Error(result.reason ?? 'BROWSER_CLOSE_FAILED');
     });
@@ -75,6 +87,7 @@ export function buildApp(options: AppOptions = {}) {
 
   app.post<{ Params: { id: string } }>('/api/accounts/:id/check', async (request, reply) => {
     if (!database.getAccount(request.params.id)) return reply.code(404).send({ error: 'NOT_FOUND', message: 'Không tìm thấy tài khoản' });
+    if (deletingAccounts.has(request.params.id)) return reply.code(409).send({ error: 'ACCOUNT_DELETING', message: 'Tài khoản đang được xóa cục bộ.' });
     try {
       const status = await browser.status(request.params.id);
       database.updateRuntimeState(request.params.id, { browserStatus: status.state === 'RUNNING' ? 'RUNNING' : status.state === 'CRASHED' ? 'CRASHED' : 'STOPPED', sessionStatus: 'AUTH_UNKNOWN' });
@@ -89,7 +102,7 @@ export function buildApp(options: AppOptions = {}) {
     reply.raw.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
     for (const event of events.recent()) reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
     const unsubscribe = events.subscribe((event) => reply.raw.write(`data: ${JSON.stringify(event)}\n\n`));
-    reply.raw.write(`data: ${JSON.stringify(events.publish({ type: 'SYSTEM', severity: 'info', stage: 'ready', safe_message: 'Đã kết nối console an toàn.' }))}\n\n`);
+    events.publish({ type: 'SYSTEM', severity: 'info', stage: 'ready', safe_message: 'Đã kết nối console an toàn.' });
     reply.raw.on('close', () => { unsubscribe(); reply.raw.end(); });
     return reply;
   });
@@ -118,7 +131,10 @@ export function buildApp(options: AppOptions = {}) {
     });
   });
 
-  registerAccountRoutes(app, database, deletion);
+  registerAccountRoutes(app, database, deletion, {
+    beforeDelete: (id) => { deletingAccounts.add(id); jobs.cancelAccount(id); },
+    afterDelete: (id) => { deletingAccounts.delete(id); },
+  });
   app.setErrorHandler(async (error, _request, reply) => {
     console.error('[flash-router] request failed', { name: error instanceof Error ? error.name : 'UnknownError' });
     return reply.code(500).send({

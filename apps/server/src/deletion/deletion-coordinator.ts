@@ -83,7 +83,7 @@ function validateAccountId(accountId: string): void {
     || accountId.length === 0
     || accountId.length > 256
     || accountId !== accountId.trim()
-    || /[\u0000-\u001f\u007f]/u.test(accountId)
+    || /[\u0000-\u001f\u007f\\/]/u.test(accountId)
   ) {
     throw new DeletionError('INVALID_ACCOUNT_ID', 'The account ID is invalid.');
   }
@@ -186,12 +186,14 @@ async function inspectOwnedProfile(profilePath: string, profilesRoot: string, ha
 
 export class DeletionCoordinator {
   private readonly dataDir: string | undefined;
+  private readonly profilesRoot: string | undefined;
 
   constructor(
     private readonly browserSupervisor: BrowserSupervisorPort,
     options: DeletionCoordinatorOptions = {},
   ) {
     this.dataDir = configuredDataDir(options);
+    this.profilesRoot = options.profilesRoot ? resolve(options.profilesRoot) : undefined;
   }
 
   async deleteAccount(accountId: string): Promise<DeletionResult> {
@@ -256,9 +258,8 @@ export class DeletionCoordinator {
     }
     rejectDefaultChromePath(dataRoot);
 
-    const configuredProfilesRoot = resolve(
-      process.env.FLASH_ROUTER_PROFILES_ROOT || join(dataRoot, 'profiles'),
-    );
+    const configuredProfilesRoot = canonicalOrResolved(this.profilesRoot
+      ?? resolve(process.env.FLASH_ROUTER_PROFILES_ROOT || join(dataRoot, 'profiles')));
     if (!isDirectChild(dataRoot, configuredProfilesRoot)) {
       throw new DeletionError('DATA_ROOT_INVALID', 'The profiles root must be a direct child of the data root.');
     }

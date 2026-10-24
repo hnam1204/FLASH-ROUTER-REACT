@@ -315,22 +315,22 @@ function App() {
               <div><p className="eyebrow">01 / THÊM TÀI KHOẢN</p><h2>Nhập thông tin kết nối</h2></div>
               <span className="step-number">01</span>
             </div>
-            <p className="panel-intro">Gửi chuỗi kết nối một lần để backend tạo hồ sơ Chrome được tách riêng.</p>
+            <p className="panel-intro">Đăng ký email để backend tạo hồ sơ Chrome riêng. Bạn sẽ xác thực thủ công trong Chrome chính thức.</p>
             <form onSubmit={handleCreate}>
               <div className="field-group">
-                <label htmlFor="account-input">Chuỗi tài khoản</label>
-                <input id="account-input" type="password" value={secretInput} onChange={(event) => setSecretInput(event.target.value)} placeholder="EMAIL|PASS|2FA_SECRET" autoComplete="new-password" spellCheck={false} required />
-                <p className="field-hint"><Icon name="shield" /> Chỉ gửi tới backend khi bạn bấm thêm. Không lưu vào localStorage, không hiển thị lại sau khi gửi.</p>
+                <label htmlFor="account-input">Email tài khoản</label>
+                <input id="account-input" type="email" value={secretInput} onChange={(event) => setSecretInput(event.target.value)} placeholder="you@example.com" autoComplete="off" spellCheck={false} required />
+                <p className="field-hint"><Icon name="shield" /> Không nhập mật khẩu, mã 2FA hoặc cookie vào ứng dụng. Xác thực chỉ diễn ra trong Chrome chính thức.</p>
               </div>
               <div className="field-group">
                 <label htmlFor="account-name">Tên hiển thị <span>(không bắt buộc)</span></label>
                 <input id="account-name" type="text" value={accountName} onChange={(event) => setAccountName(event.target.value)} placeholder="Ví dụ: Tài khoản làm việc" maxLength={120} />
               </div>
-              <button className="button button--primary button--wide" type="submit" disabled={creating || !secretInput.trim()} title={!secretInput.trim() ? 'Nhập chuỗi EMAIL|PASS|2FA_SECRET trước' : undefined}>
+              <button className="button button--primary button--wide" type="submit" disabled={creating || !secretInput.trim()} title={!secretInput.trim() ? 'Nhập email trước' : undefined}>
                 <Icon name="plus" /> {creating ? 'Đang gửi...' : 'Thêm tài khoản'}
               </button>
             </form>
-            <div className="security-note"><span className="security-note__mark"><Icon name="shield" /></span><div><strong>Cam kết an toàn</strong><p>Password và 2FA_SECRET không được lưu trong database theo hợp đồng hệ thống.</p></div></div>
+            <div className="security-note"><span className="security-note__mark"><Icon name="shield" /></span><div><strong>Cam kết an toàn</strong><p>Không yêu cầu hoặc lưu password, mã 2FA, cookie hay token.</p></div></div>
           </div>
 
           <div className="panel accounts-panel">
