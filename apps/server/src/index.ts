@@ -8,6 +8,7 @@ import { BrowserSupervisor } from './browser/index.js';
 import { DeletionCoordinator } from './deletion/index.js';
 import { EventHub } from './events/index.js';
 import { JobManager } from './jobs/index.js';
+import type { BrowserStatus } from './browser/types.js';
 
 export type AppOptions = {
   databasePath?: string;
@@ -34,6 +35,17 @@ function readPort(): number {
   return value;
 }
 
+const localOrigins = new Set(['http://127.0.0.1:5173', 'http://localhost:5173']);
+
+function publicBrowserStatus(status: BrowserStatus): Omit<BrowserStatus, 'profilePath'> {
+  const { profilePath: _profilePath, ...safeStatus } = status;
+  return safeStatus;
+}
+
+function isLoopbackHost(host: string): boolean {
+  return host === '127.0.0.1' || host === 'localhost' || host === '::1';
+}
+
 export function buildApp(options: AppOptions = {}) {
   const database = new AccountDatabase(options.databasePath ?? defaultDatabasePath());
   const dataDir = options.dataDir ?? defaultDataDirectory();
@@ -51,9 +63,23 @@ export function buildApp(options: AppOptions = {}) {
   const deletion = new DeletionCoordinator(browser, { dataDir, profilesRoot });
   const app = Fastify({ logger: false });
   app.register(cors, { origin: ['http://127.0.0.1:5173', 'http://localhost:5173'] });
+  app.addHook('onRequest', async (request, reply) => {
+    if (request.method === 'OPTIONS' || request.method === 'GET' || request.method === 'HEAD') return;
+    const origin = request.headers.origin;
+    if (origin && !localOrigins.has(origin)) {
+      return reply.code(403).send({ error: 'ORIGIN_NOT_ALLOWED', message: 'Origin không được phép cho thao tác thay đổi dữ liệu.' });
+    }
+  });
 
   app.addHook('onClose', async () => {
-    await browser.closeAll();
+    await jobs.shutdown();
+    const results = await browser.closeAll();
+    for (const result of results) {
+      database.updateRuntimeState(result.status.accountId, {
+        browserStatus: result.status.state === 'CRASHED' ? 'CRASHED' : 'STOPPED',
+        automationStatus: result.ok ? 'COMPLETED' : 'FAILED',
+      });
+    }
     database.close();
   });
 
@@ -92,7 +118,7 @@ export function buildApp(options: AppOptions = {}) {
       const status = await browser.status(request.params.id);
       database.updateRuntimeState(request.params.id, { browserStatus: status.state === 'RUNNING' ? 'RUNNING' : status.state === 'CRASHED' ? 'CRASHED' : 'STOPPED', sessionStatus: 'AUTH_UNKNOWN' });
       events.publish({ account_id: request.params.id, type: 'SESSION', severity: 'warning', stage: 'observe', safe_message: 'Đã kiểm tra local; chưa có bằng chứng xác nhận phiên provider.', error_code: 'AUTH_UNKNOWN' });
-      return reply.send({ status, sessionStatus: 'AUTH_UNKNOWN', message: 'Đã kiểm tra trạng thái local; chưa có bằng chứng xác nhận phiên provider.' });
+      return reply.send({ status: publicBrowserStatus(status), sessionStatus: 'AUTH_UNKNOWN', message: 'Đã kiểm tra trạng thái local; chưa có bằng chứng xác nhận phiên provider.' });
     } catch {
       return reply.code(503).send({ error: 'BROWSER_STATUS_UNAVAILABLE', message: 'Chưa thể kiểm tra runtime Chrome trên máy này.' });
     }
@@ -132,7 +158,7 @@ export function buildApp(options: AppOptions = {}) {
   });
 
   registerAccountRoutes(app, database, deletion, {
-    beforeDelete: (id) => { deletingAccounts.add(id); jobs.cancelAccount(id); },
+    beforeDelete: async (id) => { deletingAccounts.add(id); jobs.cancelAccount(id); await jobs.drainAccount(id); },
     afterDelete: (id) => { deletingAccounts.delete(id); },
   });
   app.setErrorHandler(async (error, _request, reply) => {
@@ -148,8 +174,10 @@ export function buildApp(options: AppOptions = {}) {
 async function start(): Promise<void> {
   const app = buildApp();
   try {
+    const host = process.env.FLASH_ROUTER_HOST ?? '127.0.0.1';
+    if (!isLoopbackHost(host)) throw new Error('FLASH_ROUTER_HOST must be loopback-only');
     await app.listen({
-      host: process.env.FLASH_ROUTER_HOST ?? '127.0.0.1',
+      host,
       port: readPort(),
     });
   } catch {

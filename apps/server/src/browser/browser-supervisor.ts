@@ -183,6 +183,7 @@ export class BrowserSupervisor {
   };
 
   private readonly running = new Map<string, RunningBrowser>();
+  private readonly starting = new Map<string, Promise<void>>();
   private readonly lastStatus = new Map<string, BrowserStatus>();
 
   constructor(options: BrowserSupervisorOptions = {}) {
@@ -379,11 +380,13 @@ export class BrowserSupervisor {
     this.running.set(hash, record);
     this.lastStatus.set(hash, this.statusForActive(record));
 
-    try {
-      const context = await runtime.module.chromium!.launchPersistentContext(profilePath, {
+    const contextPromise = runtime.module.chromium!.launchPersistentContext(profilePath, {
         channel: options.browserChannel ?? this.options.browserChannel,
         headless,
       });
+    this.starting.set(hash, contextPromise.then(() => undefined, () => undefined));
+    try {
+      const context = await contextPromise;
       record.context = context;
       context.on('close', () => {
         void this.handleUnexpectedClose(record);
@@ -404,6 +407,8 @@ export class BrowserSupervisor {
         headless,
       }, hash);
       return { ok: false, status, reason };
+    } finally {
+      this.starting.delete(hash);
     }
   }
 
@@ -415,6 +420,9 @@ export class BrowserSupervisor {
       const status = await this.status(accountId);
       if (status.state === 'LOCKED') {
         return this.failure(status, 'PROFILE_BUSY');
+      }
+      if (status.state === 'CRASHED' && status.reason !== 'LOCK_RELEASE_FAILED') {
+        return { ok: true, status };
       }
       return { ok: status.state === 'STOPPED', status, reason: status.reason };
     }
@@ -431,7 +439,11 @@ export class BrowserSupervisor {
       });
       await active.closePromise;
     } catch {
-      const status = await this.finalizeClosedRecord(active, 'BROWSER_CLOSE_FAILED');
+      const status = this.remember({
+        ...this.statusForActive(active),
+        state: 'CRASHED',
+        reason: 'BROWSER_CLOSE_FAILED',
+      }, hash);
       return { ok: false, status, reason: 'BROWSER_CLOSE_FAILED' };
     }
 
@@ -442,10 +454,11 @@ export class BrowserSupervisor {
     return this.failure(status, status.reason ?? 'LOCK_RELEASE_FAILED');
   }
 
-  async closeAll(): Promise<void> {
-    await Promise.all([...this.running.values()].map(async (record) => {
-      await this.stop(record.accountId);
-    }));
+  async closeAll(): Promise<BrowserOperationResult[]> {
+    while (this.starting.size > 0) {
+      await Promise.all([...this.starting.values()]);
+    }
+    return Promise.all([...this.running.values()].map((record) => this.stop(record.accountId)));
   }
 
   private async handleUnexpectedClose(record: RunningBrowser): Promise<void> {

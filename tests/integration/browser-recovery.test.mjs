@@ -14,8 +14,16 @@ class FakeContext {
   crash() { this.closed = true; this.#listeners.splice(0).forEach((listener) => listener()); }
 }
 
+class FailingCloseContext extends FakeContext {
+  async close() { throw new Error('close failed'); }
+}
+
 function fakeRuntime(contexts) {
   return { chromium: { launchPersistentContext: async () => { const context = new FakeContext(); contexts.push(context); return context; } } };
+}
+
+function failingCloseRuntime(contexts) {
+  return { chromium: { launchPersistentContext: async () => { const context = new FailingCloseContext(); contexts.push(context); return context; } } };
 }
 
 test('browser crash preserves owned profile, releases lock, and permits restart', async () => {
@@ -50,6 +58,23 @@ test('stale lock from a dead process is recovered without deleting profile data'
     await writeFile(paths.lock, JSON.stringify({ pid: 2147483647, accountHash: hash, startedAt: new Date().toISOString() }));
     assert.equal((await supervisor.status('stale@example.com')).state, 'STOPPED');
     assert.equal((await stat(paths.profile)).isDirectory(), true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('failed browser close retains the lock and blocks a second profile owner', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'flash-router-close-failure-'));
+  const contexts = [];
+  const supervisor = new BrowserSupervisor({ profilesRoot: join(root, 'profiles'), runtime: failingCloseRuntime(contexts) });
+  try {
+    assert.equal((await supervisor.start('close-failure@example.com', { headless: true })).ok, true);
+    const stopped = await supervisor.stop('close-failure@example.com');
+    assert.equal(stopped.ok, false);
+    assert.equal(stopped.reason, 'BROWSER_CLOSE_FAILED');
+    const restart = await supervisor.start('close-failure@example.com', { headless: true });
+    assert.equal(restart.ok, false);
+    assert.equal(restart.reason, 'PROFILE_BUSY');
   } finally {
     await rm(root, { recursive: true, force: true });
   }

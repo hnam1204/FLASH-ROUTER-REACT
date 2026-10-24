@@ -22,7 +22,7 @@ test('API persists account metadata and rejects duplicate email', async () => {
     const duplicate = await app.inject({
       method: 'POST',
       url: '/api/accounts',
-      payload: { input: 'integration@example.com' },
+      payload: { input: '  INTEGRATION@example.com  ' },
     });
     assert.equal(duplicate.statusCode, 409);
 
@@ -30,7 +30,34 @@ test('API persists account metadata and rejects duplicate email', async () => {
     assert.equal(list.statusCode, 200);
     assert.equal(JSON.parse(list.body).accounts.length, 1);
   } finally {
-    await app.close();
+    try {
+      await app.close();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }
+});
+
+test('SQLite metadata survives backend restart', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'flash-router-restart-'));
+  const databasePath = join(root, 'router.sqlite');
+  try {
+    const first = buildApp({ databasePath, dataDir: root, profilesRoot: join(root, 'profiles') });
+    try {
+      const create = await first.inject({ method: 'POST', url: '/api/accounts', payload: { input: 'persist@example.com', name: 'Persisted' } });
+      assert.equal(create.statusCode, 201);
+    } finally {
+      await first.close();
+    }
+    const second = buildApp({ databasePath, dataDir: root, profilesRoot: join(root, 'profiles') });
+    try {
+      const list = await second.inject({ method: 'GET', url: '/api/accounts' });
+      assert.equal(list.statusCode, 200);
+      assert.equal(JSON.parse(list.body).accounts[0].email, 'persist@example.com');
+    } finally {
+      await second.close();
+    }
+  } finally {
     await rm(root, { recursive: true, force: true });
   }
 });
@@ -45,13 +72,30 @@ test('API keeps secrets out of account responses and rejects foreign CORS origin
       headers: { origin: 'https://malicious.example' },
       payload: { input: 'safe@example.com' },
     });
-    assert.equal(create.statusCode, 201);
+    assert.equal(create.statusCode, 403);
     assert.equal(create.headers['access-control-allow-origin'], undefined);
 
+    const valid = await app.inject({ method: 'POST', url: '/api/accounts', headers: { origin: 'http://localhost:5173' }, payload: { input: 'safe@example.com' } });
+    assert.equal(valid.statusCode, 201);
+    const wrongDelete = await app.inject({ method: 'DELETE', url: `/api/accounts/${JSON.parse(valid.body).id}`, payload: { confirm: true, expectedEmail: 'wrong@example.com' } });
+    assert.equal(wrongDelete.statusCode, 409);
+
+    const missingConfirmationEmail = await app.inject({ method: 'DELETE', url: `/api/accounts/${JSON.parse(valid.body).id}`, payload: { confirm: true } });
+    assert.equal(missingConfirmationEmail.statusCode, 400);
+
+    const check = await app.inject({ method: 'POST', url: `/api/accounts/${JSON.parse(valid.body).id}/check`, payload: {} });
+    assert.equal(check.statusCode, 200);
+    const checkBody = JSON.parse(check.body);
+    assert.equal(checkBody.sessionStatus, 'AUTH_UNKNOWN');
+    assert.equal('profilePath' in checkBody.status, false);
+
     const traversal = await app.inject({ method: 'GET', url: '/api/accounts/..%2F..%2Fetc' });
-    assert.notEqual(traversal.statusCode, 200);
+    assert.equal(traversal.statusCode, 404);
   } finally {
-    await app.close();
-    await rm(root, { recursive: true, force: true });
+    try {
+      await app.close();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   }
 });

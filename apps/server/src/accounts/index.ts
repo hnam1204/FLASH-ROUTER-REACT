@@ -10,12 +10,12 @@ const updateAccountSchema = z.object({
   plan: z.string().trim().min(1).max(120).optional(),
 }).refine((value) => Object.keys(value).length > 0, 'Cần cung cấp metadata cần cập nhật');
 
-const deleteAccountSchema = z.object({ confirm: z.literal(true), expectedEmail: z.string().email().optional() });
+const deleteAccountSchema = z.object({ confirm: z.literal(true), expectedEmail: z.string().email() });
 
 type AccountParams = { id: string };
 type AccountListQuery = { cursor?: string; limit?: string; q?: string };
 type AccountRouteOptions = {
-  beforeDelete?: (id: string) => void;
+  beforeDelete?: (id: string) => void | Promise<void>;
   afterDelete?: (id: string) => void;
 };
 
@@ -46,6 +46,7 @@ function parseCredentialInput(input: string): { email: string } | null {
 }
 
 export function registerAccountRoutes(app: FastifyInstance, database: AccountDatabase, deletion?: DeletionCoordinator, options: AccountRouteOptions = {}): void {
+  const deletionLocks = new Map<string, Promise<void>>();
   app.get<{ Querystring: AccountListQuery }>('/api/accounts', async (request, reply) => {
     const limit = request.query.limit === undefined ? 50 : Number(request.query.limit);
     const query = request.query.q?.trim() ?? '';
@@ -119,30 +120,42 @@ export function registerAccountRoutes(app: FastifyInstance, database: AccountDat
   app.delete<{ Params: AccountParams }>('/api/accounts/:id', async (request, reply) => {
     const parsedBody = deleteAccountSchema.safeParse(request.body);
     if (!parsedBody.success) {
-      return validationError(reply, ['Xác nhận xóa bằng {"confirm":true}']);
+      return validationError(reply, ['Xác nhận xóa bằng {"confirm":true} và nhập đúng expectedEmail']);
     }
     if (!database.getAccount(request.params.id)) {
       return reply.code(404).send({ error: 'NOT_FOUND', message: 'Không tìm thấy tài khoản' });
     }
     const currentAccount = database.getAccount(request.params.id);
-    if (parsedBody.data.expectedEmail && parsedBody.data.expectedEmail.toLowerCase() !== currentAccount?.email.toLowerCase()) {
+    if (parsedBody.data.expectedEmail.toLowerCase() !== currentAccount?.email.toLowerCase()) {
       return reply.code(409).send({ error: 'IDENTITY_MISMATCH', message: 'Email xác nhận không khớp hồ sơ.' });
     }
-    options.beforeDelete?.(request.params.id);
-    if (deletion) {
-      const result = await deletion.deleteAccount(request.params.id);
-      if (!result.ok) {
-        options.afterDelete?.(request.params.id);
-        return reply.code(409).send({ error: result.code, message: result.message });
+    if (deletionLocks.has(request.params.id)) {
+      return reply.code(409).send({ error: 'ACCOUNT_DELETING', message: 'Tài khoản đang được xóa cục bộ.' });
+    }
+    let releaseDeletionLock!: () => void;
+    const deletionLock = new Promise<void>((resolve) => { releaseDeletionLock = resolve; });
+    deletionLocks.set(request.params.id, deletionLock);
+    try {
+      await options.beforeDelete?.(request.params.id);
+      if (deletion) {
+        const result = await deletion.deleteAccount(request.params.id);
+        if (!result.ok) {
+          return reply.code(409).send({ error: result.code, message: result.message });
+        }
+      }
+      if (!database.deleteAccount(request.params.id)) {
+        return reply.code(404).send({
+          error: 'NOT_FOUND',
+          message: 'Không tìm thấy tài khoản',
+        });
+      }
+      return reply.send({ deleted: true, id: request.params.id });
+    } finally {
+      options.afterDelete?.(request.params.id);
+      if (deletionLocks.get(request.params.id) === deletionLock) {
+        deletionLocks.delete(request.params.id);
+        releaseDeletionLock();
       }
     }
-    if (!database.deleteAccount(request.params.id)) {
-      return reply.code(404).send({
-        error: 'NOT_FOUND',
-        message: 'Không tìm thấy tài khoản',
-      });
-    }
-    options.afterDelete?.(request.params.id);
-    return reply.send({ deleted: true, id: request.params.id });
   });
 }

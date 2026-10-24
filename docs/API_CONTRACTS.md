@@ -12,7 +12,7 @@ A0 chốt schemas trong `packages/shared` trước khi A1/A2/A3/A4 cùng sửa c
 | POST | `/api/accounts/:id/browser/open` | Queue real Chrome launch |
 | POST | `/api/accounts/:id/browser/close` | Gracefully close account-owned Chrome |
 | POST | `/api/accounts/:id/check` | Observation attempt, may return UNKNOWN |
-| DELETE | `/api/accounts/:id` | Explicit confirmation + async deletion job |
+| DELETE | `/api/accounts/:id` | Explicit confirmation plus exact `expectedEmail` + local deletion |
 | GET | `/api/jobs/:id` | Actual job progress |
 | GET | `/api/events/stream` | Redacted SSE events |
 | GET | `/api/diagnostics/:jobId` | Redacted diagnostics |
