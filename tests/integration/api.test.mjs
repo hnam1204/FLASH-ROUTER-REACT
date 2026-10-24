@@ -34,3 +34,25 @@ test('API persists account metadata and rejects duplicate email', async () => {
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('API keeps secrets out of account responses and rejects foreign CORS origins', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'flash-router-security-'));
+  const app = buildApp({ databasePath: join(root, 'router.sqlite'), dataDir: root, profilesRoot: join(root, 'profiles') });
+  try {
+    const create = await app.inject({
+      method: 'POST',
+      url: '/api/accounts',
+      headers: { origin: 'https://malicious.example' },
+      payload: { input: 'safe@example.com|password-must-not-return|totp-must-not-return' },
+    });
+    assert.equal(create.statusCode, 201);
+    assert.equal(create.headers['access-control-allow-origin'], undefined);
+    assert.doesNotMatch(create.body, /password-must-not-return|totp-must-not-return/);
+
+    const traversal = await app.inject({ method: 'GET', url: '/api/accounts/..%2F..%2Fetc' });
+    assert.notEqual(traversal.statusCode, 200);
+  } finally {
+    await app.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});

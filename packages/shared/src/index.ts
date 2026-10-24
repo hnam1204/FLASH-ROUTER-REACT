@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const sessionStatus = z.enum(['UNKNOWN', 'LOGIN_REQUIRED', 'AUTHENTICATING', 'ACTION_REQUIRED', 'ACTIVE', 'EXPIRED']);
+export const sessionStatus = z.enum(['UNKNOWN', 'AUTH_UNKNOWN', 'LOGIN_REQUIRED', 'AUTHENTICATING', 'ACTION_REQUIRED', 'ACTIVE', 'EXPIRED']);
 export const browserStatus = z.enum(['STOPPED', 'STARTING', 'RUNNING', 'STOPPING', 'CRASHED']);
 export const automationStatus = z.enum(['IDLE', 'QUEUED', 'RUNNING', 'WAITING_FOR_USER', 'COMPLETED', 'FAILED', 'CANCELLED']);
 

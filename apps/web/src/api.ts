@@ -1,5 +1,6 @@
 export type SessionStatus =
   | 'UNKNOWN'
+  | 'AUTH_UNKNOWN'
   | 'LOGIN_REQUIRED'
   | 'AUTHENTICATING'
   | 'ACTION_REQUIRED'

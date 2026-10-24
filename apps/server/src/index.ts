@@ -43,7 +43,7 @@ export function buildApp(options: AppOptions = {}) {
   const events = new EventHub();
   const jobs = new JobManager(events);
   const app = Fastify({ logger: false });
-  app.register(cors, { origin: true });
+  app.register(cors, { origin: ['http://127.0.0.1:5173', 'http://localhost:5173'] });
 
   app.addHook('onClose', async () => {
     database.close();
@@ -51,24 +51,35 @@ export function buildApp(options: AppOptions = {}) {
 
   app.post<{ Params: { id: string } }>('/api/accounts/:id/browser/open', async (request, reply) => {
     if (!database.getAccount(request.params.id)) return reply.code(404).send({ error: 'NOT_FOUND', message: 'Không tìm thấy tài khoản' });
-    const result = await browser.start(request.params.id, { headless: false });
-    events.publish({ account_id: request.params.id, type: 'BROWSER', severity: result.ok ? 'info' : 'error', stage: 'open', safe_message: result.ok ? 'Chrome profile đã mở.' : 'Không thể mở Chrome profile.', error_code: result.reason });
-    return reply.code(result.ok ? 200 : 409).send(result);
+    const job = jobs.enqueue(request.params.id, 'browser.open', async () => {
+      const result = await browser.start(request.params.id, { headless: false });
+      database.updateRuntimeState(request.params.id, { browserStatus: result.status.state === 'RUNNING' ? 'RUNNING' : 'CRASHED', automationStatus: result.ok ? 'COMPLETED' : 'FAILED' });
+      events.publish({ account_id: request.params.id, type: 'BROWSER', severity: result.ok ? 'info' : 'error', stage: 'open', safe_message: result.ok ? 'Chrome profile đã mở.' : 'Không thể mở Chrome profile.', error_code: result.reason });
+      if (!result.ok) throw new Error(result.reason ?? 'BROWSER_OPEN_FAILED');
+    });
+    database.updateRuntimeState(request.params.id, { automationStatus: 'QUEUED' });
+    return reply.code(202).send({ jobId: job.id, message: 'Đã xếp hàng mở Chrome profile.' });
   });
 
   app.post<{ Params: { id: string } }>('/api/accounts/:id/browser/close', async (request, reply) => {
     if (!database.getAccount(request.params.id)) return reply.code(404).send({ error: 'NOT_FOUND', message: 'Không tìm thấy tài khoản' });
-    const result = await browser.stop(request.params.id);
-    events.publish({ account_id: request.params.id, type: 'BROWSER', severity: result.ok ? 'info' : 'error', stage: 'close', safe_message: result.ok ? 'Chrome profile đã đóng.' : 'Không thể đóng Chrome profile.', error_code: result.reason });
-    return reply.code(result.ok ? 200 : 409).send(result);
+    const job = jobs.enqueue(request.params.id, 'browser.close', async () => {
+      const result = await browser.stop(request.params.id);
+      database.updateRuntimeState(request.params.id, { browserStatus: result.status.state === 'STOPPED' ? 'STOPPED' : 'CRASHED', automationStatus: result.ok ? 'COMPLETED' : 'FAILED' });
+      events.publish({ account_id: request.params.id, type: 'BROWSER', severity: result.ok ? 'info' : 'error', stage: 'close', safe_message: result.ok ? 'Chrome profile đã đóng.' : 'Không thể đóng Chrome profile.', error_code: result.reason });
+      if (!result.ok) throw new Error(result.reason ?? 'BROWSER_CLOSE_FAILED');
+    });
+    database.updateRuntimeState(request.params.id, { automationStatus: 'QUEUED' });
+    return reply.code(202).send({ jobId: job.id, message: 'Đã xếp hàng đóng Chrome profile.' });
   });
 
   app.post<{ Params: { id: string } }>('/api/accounts/:id/check', async (request, reply) => {
     if (!database.getAccount(request.params.id)) return reply.code(404).send({ error: 'NOT_FOUND', message: 'Không tìm thấy tài khoản' });
     try {
       const status = await browser.status(request.params.id);
-      events.publish({ account_id: request.params.id, type: 'SESSION', severity: 'info', stage: 'observe', safe_message: 'Đã kiểm tra trạng thái local; session provider chưa được xác nhận.' });
-      return reply.send({ status, message: 'Đã kiểm tra trạng thái local; session provider chưa được xác nhận.' });
+      database.updateRuntimeState(request.params.id, { browserStatus: status.state === 'RUNNING' ? 'RUNNING' : status.state === 'CRASHED' ? 'CRASHED' : 'STOPPED', sessionStatus: 'AUTH_UNKNOWN' });
+      events.publish({ account_id: request.params.id, type: 'SESSION', severity: 'warning', stage: 'observe', safe_message: 'Đã kiểm tra local; chưa có bằng chứng xác nhận phiên provider.', error_code: 'AUTH_UNKNOWN' });
+      return reply.send({ status, sessionStatus: 'AUTH_UNKNOWN', message: 'Đã kiểm tra trạng thái local; chưa có bằng chứng xác nhận phiên provider.' });
     } catch {
       return reply.code(503).send({ error: 'BROWSER_STATUS_UNAVAILABLE', message: 'Chưa thể kiểm tra runtime Chrome trên máy này.' });
     }
@@ -109,8 +120,7 @@ export function buildApp(options: AppOptions = {}) {
 
   registerAccountRoutes(app, database, deletion);
   app.setErrorHandler(async (error, _request, reply) => {
-    const errorMessage = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
-    console.error(`[flash-router] ${errorMessage}`);
+    console.error('[flash-router] request failed', { name: error instanceof Error ? error.name : 'UnknownError' });
     return reply.code(500).send({
     error: 'INTERNAL_ERROR',
     message: 'Đã xảy ra lỗi máy chủ',

@@ -11,7 +11,8 @@ test('no profile directory is committed in source structure', () => {
   assert.equal(existsSync(new URL('../../profiles/',import.meta.url)),false);
 });
 
-test('real product not falsely marked as complete', () => {
+test('README keeps provider authentication as a human-verified gate', () => {
   const readme=readFileSync(new URL('../../README.md',import.meta.url),'utf8');
-  assert.match(readme,/chưa có ứng dụng hoàn chỉnh/);
+  assert.match(readme,/yêu cầu người dùng hoàn tất các challenge chính thức trong Chrome/);
+  assert.match(readme,/không có CAPTCHA\/MFA bypass/);
 });

@@ -32,8 +32,15 @@ export class JobManager {
     this.active.add(accountId);
     task.job.status = 'RUNNING'; task.job.startedAt = new Date().toISOString();
     this.events.publish({ account_id: accountId, job_id: task.job.id, type: 'JOB', severity: 'info', stage: task.job.stage, safe_message: 'Job bắt đầu.' });
-    try { await task.run(); task.job.status = 'COMPLETED'; }
-    catch { task.job.status = 'FAILED'; task.job.errorCode = 'JOB_FAILED'; }
+    try {
+      await task.run();
+      task.job.status = 'COMPLETED';
+      this.events.publish({ account_id: accountId, job_id: task.job.id, type: 'JOB', severity: 'info', stage: task.job.stage, safe_message: 'Job hoàn tất.' });
+    } catch {
+      task.job.status = 'FAILED';
+      task.job.errorCode = 'JOB_FAILED';
+      this.events.publish({ account_id: accountId, job_id: task.job.id, type: 'ERROR', severity: 'error', stage: task.job.stage, safe_message: 'Job không hoàn tất.', error_code: task.job.errorCode });
+    }
     finally { task.job.finishedAt = new Date().toISOString(); this.active.delete(accountId); void this.pump(accountId); }
   }
 }

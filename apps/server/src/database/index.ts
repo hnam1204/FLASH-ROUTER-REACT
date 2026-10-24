@@ -177,6 +177,21 @@ export class AccountDatabase {
     return result.changes > 0 ? this.getAccount(id) : null;
   }
 
+  updateRuntimeState(id: string, patch: Partial<Pick<Account, 'browserStatus' | 'sessionStatus' | 'automationStatus' | 'lastLoginAt'>>): Account | null {
+    const result = this.database.prepare(`
+      UPDATE accounts SET browser_status = COALESCE(?, browser_status),
+        session_status = COALESCE(?, session_status), automation_status = COALESCE(?, automation_status),
+        last_login_at = COALESCE(?, last_login_at) WHERE id = ?
+    `).run(
+      patch.browserStatus ?? null,
+      patch.sessionStatus ?? null,
+      patch.automationStatus ?? null,
+      patch.lastLoginAt ?? null,
+      id,
+    );
+    return result.changes > 0 ? this.getAccount(id) : null;
+  }
+
   deleteAccount(id: string): boolean {
     const result = this.database.prepare('DELETE FROM accounts WHERE id = ?').run(id);
     return result.changes > 0;

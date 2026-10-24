@@ -15,6 +15,7 @@ type EventState = 'checking' | 'connected' | 'unavailable';
 
 const sessionLabels: Record<Account['sessionStatus'], string> = {
   UNKNOWN: 'Chưa xác định',
+  AUTH_UNKNOWN: 'Chưa xác minh phiên',
   LOGIN_REQUIRED: 'Cần đăng nhập',
   AUTHENTICATING: 'Đang xác thực',
   ACTION_REQUIRED: 'Cần bạn xác minh',
@@ -55,7 +56,7 @@ function formatTime(value: string | null): string {
 
 function statusClass(status: string): string {
   if (status === 'ACTIVE' || status === 'RUNNING') return 'status status--good';
-  if (status === 'ACTION_REQUIRED' || status === 'LOGIN_REQUIRED' || status === 'EXPIRED' || status === 'CRASHED') return 'status status--warn';
+  if (status === 'ACTION_REQUIRED' || status === 'LOGIN_REQUIRED' || status === 'EXPIRED' || status === 'AUTH_UNKNOWN' || status === 'CRASHED') return 'status status--warn';
   if (status === 'STARTING' || status === 'STOPPING' || status === 'AUTHENTICATING') return 'status status--progress';
   return 'status status--muted';
 }
@@ -107,6 +108,7 @@ function App() {
 
   useEffect(() => {
     const controller = new AbortController();
+    // The request lifecycle owns these transient loading/error states.
     setLoading(true);
     setListError('');
 
